@@ -1,0 +1,64 @@
+name: CodeSaviour Enterprise CI/CD
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [14.x, 16.x, 18.x]
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Use Node.js ${{ matrix.node-version }}
+      uses: actions/setup-node@v3
+      with:
+        node-version: ${{ matrix.node-version }}
+        cache: 'npm'
+    
+    - name: Install dependencies
+      run: npm ci
+    
+    - name: Run tests
+      run: npm test
+    
+    - name: Run linting
+      run: npm run lint
+    
+    - name: Test CLI functionality
+      run: |
+        echo 'var x = 1;;' > test-file.js
+        node codesaviour-engine.js test-file.js --format json
+    
+    - name: Security scan
+      run: |
+        echo 'const password = "secret123";' > security-test.js
+        node codesaviour-engine.js security-test.js
+        if [ $? -eq 2 ]; then echo "Security scan working correctly"; fi
+  
+  docker:
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Build Docker image
+      run: docker build -t codesaviour-enterprise:latest .
+    
+    - name: Test Docker image
+      run: |
+        echo 'console.log("docker test");' > docker-test.js
+        docker run -v $(pwd):/workspace codesaviour-enterprise:latest /workspace/docker-test.js
+    
+    - name: Security scan Docker image
+      run: |
+        docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+          -v $(pwd):/tmp aquasec/trivy image codesaviour-enterprise:latest

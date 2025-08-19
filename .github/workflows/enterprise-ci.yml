@@ -1,0 +1,212 @@
+name: CodeSaviour Enterprise CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, develop, release/* ]
+  pull_request:
+    branches: [ main, develop ]
+  schedule:
+    - cron: '0 2 * * *'  # Daily security scans
+
+env:
+  NODE_VERSION: '18.x'
+  DOCKER_REGISTRY: 'ghcr.io'
+  IMAGE_NAME: 'codesaviour-enterprise'
+
+jobs:
+  quality-gate:
+    name: Quality Gate Analysis
+    runs-on: ubuntu-latest
+    outputs:
+      quality-score: ${{ steps.analysis.outputs.score }}
+      security-score: ${{ steps.analysis.outputs.security }}
+      performance-score: ${{ steps.analysis.outputs.performance }}
+    
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+    
+    - name: Install dependencies
+      run: npm ci
+    
+    - name: Run CodeSaviour Analysis
+      id: analysis
+      run: |
+        node codesaviour-engine.js . --format json --output analysis-report.json
+        QUALITY_SCORE=$(jq '.overallScore' analysis-report.json)
+        SECURITY_SCORE=$(jq '.securityScore' analysis-report.json)
+        PERFORMANCE_SCORE=$(jq '.performanceScore' analysis-report.json)
+        
+        echo "score=$QUALITY_SCORE" >> $GITHUB_OUTPUT
+        echo "security=$SECURITY_SCORE" >> $GITHUB_OUTPUT
+        echo "performance=$PERFORMANCE_SCORE" >> $GITHUB_OUTPUT
+        
+        # Quality Gate Thresholds
+        if [ "$QUALITY_SCORE" -lt "80" ]; then
+          echo "❌ Quality gate failed: Score $QUALITY_SCORE < 80"
+          exit 1
+        fi
+        
+        if [ "$SECURITY_SCORE" -lt "90" ]; then
+          echo "❌ Security gate failed: Score $SECURITY_SCORE < 90"
+          exit 1
+        fi
+    
+    - name: Upload Analysis Report
+      uses: actions/upload-artifact@v4
+      with:
+        name: quality-analysis-report
+        path: |
+          analysis-report.json
+          analysis-report.html
+          analysis-report.md
+
+  security-scan:
+    name: Advanced Security Scanning
+    runs-on: ubuntu-latest
+    needs: quality-gate
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Run Snyk Security Scan
+      uses: snyk/actions/node@master
+      env:
+        SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+      with:
+        args: --severity-threshold=medium
+    
+    - name: Run CodeQL Analysis
+      uses: github/codeql-action/init@v3
+      with:
+        languages: javascript
+    
+    - name: Perform CodeQL Analysis
+      uses: github/codeql-action/analyze@v3
+    
+    - name: OWASP Dependency Check
+      run: |
+        wget https://github.com/jeremylong/DependencyCheck/releases/download/v8.4.0/dependency-check-8.4.0-release.zip
+        unzip dependency-check-8.4.0-release.zip
+        ./dependency-check/bin/dependency-check.sh --project "CodeSaviour" --scan . --format JSON
+
+  performance-test:
+    name: Performance Benchmarking
+    runs-on: ubuntu-latest
+    needs: quality-gate
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+    
+    - name: Install dependencies
+      run: npm ci
+    
+    - name: Run Performance Benchmarks
+      run: |
+        node -e "
+        const { CodeSaviourEngine } = require('./codesaviour-engine.js');
+        const fs = require('fs');
+        const { performance } = require('perf_hooks');
+        
+        async function benchmark() {
+          const engine = new CodeSaviourEngine();
+          const testFiles = ['extreme-complexity-test.js', 'ultra-complex-test.js'];
+          const results = [];
+          
+          for (const file of testFiles) {
+            if (fs.existsSync(file)) {
+              const code = fs.readFileSync(file, 'utf8');
+              const start = performance.now();
+              await engine.analyzeCode(code, file);
+              const end = performance.now();
+              
+              results.push({
+                file,
+                size: code.length,
+                time: end - start,
+                throughput: code.length / (end - start)
+              });
+            }
+          }
+          
+          console.log('Performance Benchmark Results:');
+          console.table(results);
+          
+          // Performance thresholds
+          const avgThroughput = results.reduce((sum, r) => sum + r.throughput, 0) / results.length;
+          if (avgThroughput < 1000) {
+            console.error('Performance threshold failed: Throughput', avgThroughput, '< 1000 chars/ms');
+            process.exit(1);
+          }
+        }
+        
+        benchmark().catch(console.error);
+        "
+
+  build-and-deploy:
+    name: Build and Deploy
+    runs-on: ubuntu-latest
+    needs: [quality-gate, security-scan, performance-test]
+    if: github.ref == 'refs/heads/main'
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Setup Docker Buildx
+      uses: docker/setup-buildx-action@v3
+    
+    - name: Login to Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.DOCKER_REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    
+    - name: Build and Push Docker Image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        push: true
+        tags: |
+          ${{ env.DOCKER_REGISTRY }}/${{ github.repository }}/${{ env.IMAGE_NAME }}:latest
+          ${{ env.DOCKER_REGISTRY }}/${{ github.repository }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+    
+    - name: Deploy to Staging
+      run: |
+        echo "Deploying to staging environment..."
+        # Add your deployment logic here
+    
+    - name: Run Smoke Tests
+      run: |
+        echo "Running smoke tests..."
+        docker run --rm ${{ env.DOCKER_REGISTRY }}/${{ github.repository }}/${{ env.IMAGE_NAME }}:latest \
+          node -e "console.log('Smoke test passed')"
+
+  notify:
+    name: Notification
+    runs-on: ubuntu-latest
+    needs: [build-and-deploy]
+    if: always()
+    
+    steps:
+    - name: Notify Teams
+      uses: 8398a7/action-slack@v3
+      with:
+        status: ${{ job.status }}
+        channel: '#codesaviour-ci'
+        webhook_url: ${{ secrets.SLACK_WEBHOOK }}

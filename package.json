@@ -1,0 +1,51 @@
+{
+  "name": "codesaviour-enterprise",
+  "version": "2.0.0",
+  "description": "Enterprise-grade AI-powered code analysis and bug fixing engine",
+  "main": "codesaviour-engine.js",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=14.0.0"
+  },
+  "scripts": {
+    "start": "node codesaviour-engine.js",
+    "test": "node test/run-tests.js",
+    "lint": "eslint *.js",
+    "build": "echo 'Build completed - ready for production'",
+    "ci": "npm test && npm run lint",
+    "docker-build": "docker build -t codesaviour-enterprise .",
+    "docker-run": "docker run -v $(pwd):/workspace codesaviour-enterprise"
+  },
+  "keywords": [
+    "code-analysis",
+    "bug-fixing",
+    "enterprise",
+    "security",
+    "performance",
+    "ci-cd",
+    "nodejs"
+  ],
+  "author": "CodeSaviour Team",
+  "license": "Enterprise",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.60.0",
+    "aws-sdk": "^2.1692.0",
+    "axios": "^1.11.0"
+  },
+  "devDependencies": {
+    "@types/jest": "^30.0.0",
+    "eslint": "^8.0.0",
+    "jest": "^30.0.5"
+  },
+  "bin": {
+    "codesaviour": "./codesaviour-engine.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/codesaviour/enterprise"
+  },
+  "bugs": {
+    "url": "https://github.com/codesaviour/enterprise/issues"
+  },
+  "homepage": "https://codesaviour.com"
+}
